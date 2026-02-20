@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: #6d28d9;
+  --color-primary-light: #8b5cf6;
+  --color-accent: #f59e0b;
+  --color-bg: #0f172a;
+  --color-bg-light: #1e293b;
+  --color-surface: #334155;
+  --color-text: #f8fafc;
+  --color-text-muted: #94a3b8;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Hide Google Street View UI elements that reveal location */
+/* Address control & attribution text */
+.gm-style .gm-iv-address,
+.gm-style .gm-iv-short-address,
+.gm-style-cc,
+.gmnoprint.gm-bundled-control-on-bottom,
+div[class*="scene-description"] {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Hide the "Report a problem" link */
+.gm-style a[href*="maps.google.com/maps"] {
+  display: none !important;
+}
+
+/* Keep the pegman and controls but hide identifying text */
+.gm-style .gm-iv-marker {
+  display: none !important;
+}
+
+/* Leaflet fixes */
+.leaflet-container {
+  z-index: 10;
+  background: #1a1a2e;
+}
+
+/* Smooth transitions for the guess map */
+.guess-map-wrapper {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.guess-map-wrapper:hover {
+  opacity: 1 !important;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface);
+  border-radius: 3px;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.6s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.4s ease-out forwards;
+}
+
+/* Result line animation */
+@keyframes drawLine {
+  from { stroke-dashoffset: 1000; }
+  to { stroke-dashoffset: 0; }
+}
