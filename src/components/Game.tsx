@@ -2,7 +2,13 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import L from "leaflet";
-import { pickRandomLocations, type Location } from "@/lib/locations";
+import {
+  generateRandomPoint,
+  getSvRadius,
+  DIFFICULTY_META,
+  type Difficulty,
+  type Location,
+} from "@/lib/locations";
 
 // ════════════════════════════════════════════
 // Constants
@@ -11,10 +17,8 @@ import { pickRandomLocations, type Location } from "@/lib/locations";
 const ROUNDS_PER_GAME = 5;
 const MAX_SCORE = 5000;
 const TOTAL_MAX = ROUNDS_PER_GAME * MAX_SCORE;
-const SV_RADIUS = 50000;
+const MAX_SV_ATTEMPTS = 15;
 
-const TILE_URL =
-  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
 const TILE_LIGHT =
   "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
 
@@ -95,14 +99,15 @@ export default function Game() {
   const [keyInput, setKeyInput] = useState("");
   const [mapsLoaded, setMapsLoaded] = useState(false);
   const [mapsError, setMapsError] = useState(false);
+  const [difficulty, setDifficulty] = useState<Difficulty>(2);
 
-  const [locations, setLocations] = useState<Location[]>([]);
   const [actualLocs, setActualLocs] = useState<Location[]>([]);
   const [round, setRound] = useState(0);
   const [results, setResults] = useState<RoundResult[]>([]);
   const [guessPos, setGuessPos] = useState<L.LatLng | null>(null);
   const [mapExpanded, setMapExpanded] = useState(false);
   const [svLoading, setSvLoading] = useState(false);
+  const [svAttempts, setSvAttempts] = useState(0);
   const [animatedScore, setAnimatedScore] = useState(0);
 
   // ── Refs ─────────────────────────────────
@@ -152,8 +157,6 @@ export default function Game() {
 
   // ── Start game ───────────────────────────
   const startGame = useCallback(() => {
-    const locs = pickRandomLocations(ROUNDS_PER_GAME);
-    setLocations(locs);
     setActualLocs([]);
     setRound(0);
     setResults([]);
@@ -162,77 +165,115 @@ export default function Game() {
     setPhase("playing");
   }, []);
 
-  // ── Init Street View each round ──────────
+  // ── Find a Street View panorama dynamically ──
   useEffect(() => {
     if (phase !== "playing" || !mapsLoaded || !svDivRef.current) return;
-    const loc = locations[round];
-    if (!loc) return;
 
     setSvLoading(true);
+    setSvAttempts(0);
+    let cancelled = false;
 
     const svc = new google.maps.StreetViewService();
-    svc.getPanorama(
-      {
-        location: { lat: loc.lat, lng: loc.lng },
-        radius: SV_RADIUS,
-        preference: google.maps.StreetViewPreference.NEAREST,
-        source: google.maps.StreetViewSource.OUTDOOR,
-      },
-      (data, status) => {
-        if (status === "OK" && data?.location?.latLng) {
-          const aLat = data.location.latLng.lat();
-          const aLng = data.location.latLng.lng();
-          setActualLocs((prev) => {
-            const u = [...prev];
-            u[round] = { lat: aLat, lng: aLng };
-            return u;
-          });
+    const radius = getSvRadius(difficulty);
 
-          if (!panoRef.current) {
-            panoRef.current = new google.maps.StreetViewPanorama(
-              svDivRef.current!,
-              {
-                position: { lat: aLat, lng: aLng },
-                pov: { heading: Math.random() * 360, pitch: 0 },
-                addressControl: false,
-                showRoadLabels: false,
-                fullscreenControl: false,
-                motionTracking: false,
-                motionTrackingControl: false,
-                enableCloseButton: false,
-                linksControl: true,
-                panControl: false,
-                zoomControl: true,
-                visible: true,
-              }
-            );
-          } else {
-            panoRef.current.setPosition({ lat: aLat, lng: aLng });
-            panoRef.current.setPov({
-              heading: Math.random() * 360,
-              pitch: 0,
-            });
-            panoRef.current.setVisible(true);
+    const tryFindPanorama = (attempt: number) => {
+      if (cancelled) return;
+      if (attempt >= MAX_SV_ATTEMPTS) {
+        // Exhausted retries — try with max radius as fallback
+        const fallback = generateRandomPoint(1); // easy = likely to hit
+        svc.getPanorama(
+          {
+            location: { lat: fallback.lat, lng: fallback.lng },
+            radius: 100_000,
+            preference: google.maps.StreetViewPreference.NEAREST,
+            source: google.maps.StreetViewSource.OUTDOOR,
+          },
+          (data, status) => {
+            if (cancelled) return;
+            if (status === "OK" && data?.location?.latLng) {
+              placePanorama(
+                data.location.latLng.lat(),
+                data.location.latLng.lng()
+              );
+            }
+            setSvLoading(false);
           }
-          setSvLoading(false);
-        } else {
-          // No coverage at this location — swap in a replacement
-          const replacement = pickRandomLocations(1)[0];
-          setLocations((prev) => {
-            const u = [...prev];
-            u[round] = replacement;
-            return u;
-          });
-        }
+        );
+        return;
       }
-    );
-  }, [phase, mapsLoaded, round, locations]);
+
+      setSvAttempts(attempt + 1);
+      const candidate = generateRandomPoint(difficulty);
+
+      svc.getPanorama(
+        {
+          location: { lat: candidate.lat, lng: candidate.lng },
+          radius,
+          preference: google.maps.StreetViewPreference.NEAREST,
+          source: google.maps.StreetViewSource.OUTDOOR,
+        },
+        (data, status) => {
+          if (cancelled) return;
+          if (status === "OK" && data?.location?.latLng) {
+            placePanorama(
+              data.location.latLng.lat(),
+              data.location.latLng.lng()
+            );
+            setSvLoading(false);
+          } else {
+            // No coverage at this point — try another
+            tryFindPanorama(attempt + 1);
+          }
+        }
+      );
+    };
+
+    const placePanorama = (lat: number, lng: number) => {
+      setActualLocs((prev) => {
+        const u = [...prev];
+        u[round] = { lat, lng };
+        return u;
+      });
+
+      if (!panoRef.current) {
+        panoRef.current = new google.maps.StreetViewPanorama(
+          svDivRef.current!,
+          {
+            position: { lat, lng },
+            pov: { heading: Math.random() * 360, pitch: 0 },
+            addressControl: false,
+            showRoadLabels: false,
+            fullscreenControl: false,
+            motionTracking: false,
+            motionTrackingControl: false,
+            enableCloseButton: false,
+            linksControl: true,
+            panControl: false,
+            zoomControl: true,
+            visible: true,
+          }
+        );
+      } else {
+        panoRef.current.setPosition({ lat, lng });
+        panoRef.current.setPov({
+          heading: Math.random() * 360,
+          pitch: 0,
+        });
+        panoRef.current.setVisible(true);
+      }
+    };
+
+    tryFindPanorama(0);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [phase, mapsLoaded, round, difficulty]);
 
   // ── Init / destroy guess map ─────────────
   useEffect(() => {
     if (phase !== "playing") return;
 
-    // Small delay to let DOM mount
     const t = setTimeout(() => {
       if (!guessDivRef.current || guessMap.current) return;
 
@@ -258,7 +299,6 @@ export default function Game() {
       });
 
       guessMap.current = map;
-      // Make sure tiles render correctly
       setTimeout(() => map.invalidateSize(), 200);
     }, 150);
 
@@ -301,7 +341,6 @@ export default function Game() {
     setResults((prev) => [...prev, rr]);
     setPhase("result");
 
-    // Animate score counter
     setAnimatedScore(0);
     let current = 0;
     const step = Math.max(1, Math.floor(sc / 40));
@@ -464,10 +503,20 @@ export default function Game() {
 
       {/* ── Loading overlay for Street View ── */}
       {phase === "playing" && svLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-slate-900/80" style={{ zIndex: 9999 }}>
+        <div
+          className="absolute inset-0 flex items-center justify-center bg-slate-900/90"
+          style={{ zIndex: 9999 }}
+        >
           <div className="text-center">
             <div className="inline-block w-12 h-12 border-4 border-purple-400 border-t-transparent rounded-full animate-spin mb-4" />
-            <p className="text-slate-300 text-lg">Finding a location...</p>
+            <p className="text-slate-300 text-lg mb-1">
+              Exploring the globe...
+            </p>
+            {svAttempts > 3 && (
+              <p className="text-slate-500 text-sm">
+                Searching for coverage... ({svAttempts}/{MAX_SV_ATTEMPTS})
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -479,7 +528,7 @@ export default function Game() {
             <h1 className="text-6xl font-black mb-3 bg-gradient-to-r from-purple-400 via-pink-400 to-amber-400 bg-clip-text text-transparent">
               VibeGuessr
             </h1>
-            <p className="text-slate-400 text-lg mb-10">
+            <p className="text-slate-400 text-lg mb-8">
               Explore the world. Guess your location.
             </p>
 
@@ -531,6 +580,50 @@ export default function Game() {
               </div>
             )}
 
+            {/* Difficulty selector */}
+            <div className="mb-8">
+              <p className="text-sm text-slate-400 mb-3">Difficulty</p>
+              <div className="flex gap-2 justify-center">
+                {([1, 2, 3, 4] as Difficulty[]).map((d) => {
+                  const meta = DIFFICULTY_META[d];
+                  const active = difficulty === d;
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => setDifficulty(d)}
+                      className="flex-1 py-3 px-2 rounded-xl text-center transition-all"
+                      style={{
+                        background: active
+                          ? "linear-gradient(135deg, #7c3aed, #db2777)"
+                          : "#1e293b",
+                        border: active
+                          ? "2px solid #a855f7"
+                          : "2px solid #334155",
+                        transform: active ? "scale(1.05)" : "scale(1)",
+                      }}
+                    >
+                      <div
+                        className="font-bold text-sm"
+                        style={{
+                          color: active ? "white" : "#94a3b8",
+                        }}
+                      >
+                        {meta.label}
+                      </div>
+                      <div
+                        className="text-xs mt-0.5"
+                        style={{
+                          color: active ? "#e2e8f0" : "#64748b",
+                        }}
+                      >
+                        {meta.description}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Game info */}
             <div className="flex justify-center gap-6 mb-8 text-sm text-slate-500">
               <span>{ROUNDS_PER_GAME} rounds</span>
@@ -564,7 +657,10 @@ export default function Game() {
 
       {/* ── HUD (during playing) ── */}
       {phase === "playing" && !svLoading && (
-        <div className="absolute top-0 left-0 right-0 pointer-events-none" style={{ zIndex: 9999 }}>
+        <div
+          className="absolute top-0 left-0 right-0 pointer-events-none"
+          style={{ zIndex: 9999 }}
+        >
           <div className="flex justify-between items-center px-5 py-3">
             <div className="pointer-events-auto bg-slate-900/80 backdrop-blur-sm px-4 py-2 rounded-lg border border-slate-700/50">
               <span className="text-sm text-slate-400">Round </span>
@@ -576,11 +672,16 @@ export default function Game() {
                 / {ROUNDS_PER_GAME}
               </span>
             </div>
-            <div className="pointer-events-auto bg-slate-900/80 backdrop-blur-sm px-4 py-2 rounded-lg border border-slate-700/50">
-              <span className="text-sm text-slate-400">Score </span>
-              <span className="text-lg font-bold text-amber-400">
-                {totalScore.toLocaleString()}
+            <div className="pointer-events-auto bg-slate-900/80 backdrop-blur-sm px-4 py-2 rounded-lg border border-slate-700/50 flex items-center gap-3">
+              <span className="text-xs text-slate-500 border-r border-slate-600 pr-3">
+                {DIFFICULTY_META[difficulty].label}
               </span>
+              <div>
+                <span className="text-sm text-slate-400">Score </span>
+                <span className="text-lg font-bold text-amber-400">
+                  {totalScore.toLocaleString()}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -610,8 +711,6 @@ export default function Game() {
               className="w-full h-full"
               style={{ cursor: "crosshair" }}
             />
-
-            {/* Expand hint */}
             {!mapExpanded && !guessPos && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <span className="bg-slate-900/70 text-slate-300 text-xs px-3 py-1.5 rounded-full">
@@ -621,7 +720,6 @@ export default function Game() {
             )}
           </div>
 
-          {/* Guess button */}
           <button
             onClick={submitGuess}
             disabled={!guessPos}
@@ -641,15 +739,12 @@ export default function Game() {
       {/* ── Result Screen ── */}
       {phase === "result" && results.length > 0 && (
         <div className="absolute inset-0 z-30 bg-slate-900 flex flex-col">
-          {/* Result map */}
           <div className="flex-1 relative">
             <div ref={resultDivRef} className="w-full h-full" />
           </div>
 
-          {/* Score card */}
           <div className="bg-slate-800 border-t border-slate-700 px-6 py-5 animate-slide-up">
             <div className="max-w-2xl mx-auto flex flex-col sm:flex-row items-center gap-4">
-              {/* Distance */}
               <div className="flex-1 text-center sm:text-left">
                 <p className="text-slate-400 text-sm mb-1">Distance</p>
                 <p className="text-2xl font-bold text-white">
@@ -657,7 +752,6 @@ export default function Game() {
                 </p>
               </div>
 
-              {/* Score bar */}
               <div className="flex-[2] w-full">
                 <div className="flex justify-between text-sm mb-1">
                   <span className="text-slate-400">Score</span>
@@ -667,7 +761,8 @@ export default function Game() {
                       color: scoreColor(results[results.length - 1].score),
                     }}
                   >
-                    {animatedScore.toLocaleString()} / {MAX_SCORE.toLocaleString()}
+                    {animatedScore.toLocaleString()} /{" "}
+                    {MAX_SCORE.toLocaleString()}
                   </span>
                 </div>
                 <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
@@ -681,7 +776,6 @@ export default function Game() {
                 </div>
               </div>
 
-              {/* Next button */}
               <div className="flex-1 flex justify-center sm:justify-end">
                 <button
                   onClick={nextRound}
@@ -701,7 +795,6 @@ export default function Game() {
       {phase === "summary" && (
         <div className="absolute inset-0 z-30 bg-gradient-to-br from-slate-900 via-purple-950/50 to-slate-900 overflow-y-auto">
           <div className="max-w-3xl mx-auto px-6 py-8 animate-fade-in">
-            {/* Header */}
             <div className="text-center mb-6">
               <h2 className="text-4xl font-black mb-2 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
                 Game Complete!
@@ -717,7 +810,6 @@ export default function Game() {
                   / {TOTAL_MAX.toLocaleString()}
                 </span>
               </div>
-              {/* Score bar */}
               <div className="max-w-md mx-auto mt-3">
                 <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
                   <div
@@ -732,12 +824,14 @@ export default function Game() {
               </div>
             </div>
 
-            {/* Summary map */}
             <div className="rounded-xl overflow-hidden border border-slate-700/50 shadow-2xl mb-6">
-              <div ref={summaryDivRef} className="w-full" style={{ height: "350px" }} />
+              <div
+                ref={summaryDivRef}
+                className="w-full"
+                style={{ height: "350px" }}
+              />
             </div>
 
-            {/* Round list */}
             <div className="space-y-3 mb-8">
               {results.map((r, i) => (
                 <div
@@ -770,7 +864,6 @@ export default function Game() {
               ))}
             </div>
 
-            {/* Play Again */}
             <div className="text-center pb-8">
               <button
                 onClick={playAgain}
