@@ -454,15 +454,17 @@ export default function Game() {
       {/* ── Street View (persists behind overlays) ── */}
       <div
         ref={svDivRef}
-        className="absolute inset-0 z-0"
+        className="absolute inset-0"
         style={{
           display: phase === "playing" ? "block" : "none",
+          zIndex: 1,
+          isolation: "isolate",
         }}
       />
 
       {/* ── Loading overlay for Street View ── */}
       {phase === "playing" && svLoading && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-900/80">
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-900/80" style={{ zIndex: 9999 }}>
           <div className="text-center">
             <div className="inline-block w-12 h-12 border-4 border-purple-400 border-t-transparent rounded-full animate-spin mb-4" />
             <p className="text-slate-300 text-lg">Finding a location...</p>
@@ -562,7 +564,7 @@ export default function Game() {
 
       {/* ── HUD (during playing) ── */}
       {phase === "playing" && !svLoading && (
-        <div className="absolute top-0 left-0 right-0 z-20 pointer-events-none">
+        <div className="absolute top-0 left-0 right-0 pointer-events-none" style={{ zIndex: 9999 }}>
           <div className="flex justify-between items-center px-5 py-3">
             <div className="pointer-events-auto bg-slate-900/80 backdrop-blur-sm px-4 py-2 rounded-lg border border-slate-700/50">
               <span className="text-sm text-slate-400">Round </span>
@@ -587,8 +589,9 @@ export default function Game() {
       {/* ── Guess Map (during playing) ── */}
       {phase === "playing" && !svLoading && (
         <div
-          className="guess-map-wrapper absolute z-20"
+          className="guess-map-wrapper absolute"
           style={{
+            zIndex: 9999,
             bottom: "24px",
             right: "24px",
             width: mapExpanded ? "min(560px, 80vw)" : "min(320px, 45vw)",

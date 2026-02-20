@@ -48,10 +48,17 @@ div[class*="scene-description"] {
   display: none !important;
 }
 
-/* Leaflet fixes */
+/* Leaflet fixes — must sit above Google Maps' internal z-indices */
 .leaflet-container {
-  z-index: 10;
+  z-index: 10 !important;
   background: #1a1a2e;
+  position: relative;
+}
+
+/* Contain Google Street View's internal z-indices */
+.gm-style {
+  position: relative !important;
+  z-index: 0 !important;
 }
 
 /* Smooth transitions for the guess map */
